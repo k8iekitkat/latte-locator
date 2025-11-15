@@ -16,6 +16,7 @@ export interface Cafe {
   aiScore?: number;
   openNow?: boolean;
   photos?: string[];
+  actualDistance?: number;
 }
 
 export interface UserProfile {
