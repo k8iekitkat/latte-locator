@@ -4,6 +4,23 @@ import { memoryCache } from '@/lib/cache/memoryCache';
 import { getCacheKey, formatDistance } from '@/lib/utils/helpers';
 import { Cafe, SearchParams } from '@/types';
 
+// Helper to convert string to unique number
+declare global {
+  interface String {
+    hashCode(): number;
+  }
+}
+
+String.prototype.hashCode = function() {
+  let hash = 0;
+  for (let i = 0; i < this.length; i++) {
+    const char = this.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return Math.abs(hash);
+};
+
 // Helper function to calculate distance
 function calculateDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371e3; // Earth radius in meters
@@ -54,7 +71,7 @@ function generateTagsFromTypes(types: string[]): string[] {
 }
 
 // Google Places API integration - Get REAL unique cafés with optional pagination
-async function fetchRealCafesFromGoogle(lat: number, lng: number, radius: number, pageToken?: string): Promise<{ cafes: Cafe[], nextPageToken?: string }> {
+async function fetchRealCafesFromGoogle(lat: number, lng: number, radius: number, searchQuery?: string, pageToken?: string): Promise<{ cafes: Cafe[], nextPageToken?: string }> {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   
   if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
@@ -73,8 +90,18 @@ async function fetchRealCafesFromGoogle(lat: number, lng: number, radius: number
       // Initial search
       console.log(`🌐 Fetching REAL cafés from Google Places API`);
       console.log(`📍 Location: ${lat}, ${lng} | Radius: ${radius}m`);
+      console.log(`🔍 Search query: "${searchQuery || 'none'}"`);
       console.log(`🔑 API Key: ${apiKey.substring(0, 10)}...${apiKey.substring(apiKey.length - 4)}`);
-      url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=cafe&key=${apiKey}`;
+      
+      // Build URL with optional search keyword
+      let baseUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${lat},${lng}&radius=${radius}&type=cafe`;
+      
+      // Add search keyword if provided
+      if (searchQuery && searchQuery.trim()) {
+        baseUrl += `&keyword=${encodeURIComponent(searchQuery.trim())}`;
+      }
+      
+      url = `${baseUrl}&key=${apiKey}`;
     }
     
     console.log(`🌐 Making request to Google Places API...`);
@@ -138,7 +165,7 @@ async function fetchRealCafesFromGoogle(lat: number, lng: number, radius: number
       const crowdLevel = actuallyOpen ? Math.floor(Math.random() * 5) + 1 : 0;
 
       return {
-        id: index + 1,
+        id: place.place_id.hashCode(), // Use hash of place_id for unique numeric ID
         googlePlaceId: place.place_id,
         name: place.name,
         address: place.vicinity || place.formatted_address || 'Address not available',
@@ -248,7 +275,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    console.log(`📍 API Request: lat=${latitude}, lng=${longitude}, radius=${radius}, pageToken=${pageToken ? 'yes' : 'no'}`);
+    console.log(`📍 API Request: lat=${latitude}, lng=${longitude}, radius=${radius}, query="${query}", pageToken=${pageToken ? 'yes' : 'no'}`);
 
     const params: SearchParams = { latitude, longitude, radius, query };
     const cacheKey = getCacheKey(params) + (pageToken ? `-${pageToken}` : '');
@@ -266,9 +293,9 @@ export async function GET(request: NextRequest) {
     }
 
     if (!result) {
-      // Fetch from Google Places API
+      // Fetch from Google Places API with search query
       console.log('🔄 Cache MISS - fetching from Google Places API...');
-      result = await fetchRealCafesFromGoogle(latitude, longitude, radius, pageToken);
+      result = await fetchRealCafesFromGoogle(latitude, longitude, radius, query, pageToken);
       
       if (!pageToken && result.cafes.length > 0) {
         // Only cache initial results

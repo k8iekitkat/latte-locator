@@ -6,11 +6,12 @@ import { Cafe, PerformanceMetrics } from '@/types';
 import { getCrowdColor, getCrowdText } from '@/lib/utils/helpers';
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
   const [cafes, setCafes] = useState<Cafe[]>([]);
   const [selectedCafe, setSelectedCafe] = useState<Cafe | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [loading, setLoading] = useState(true); // Start as true to prevent hydration
+  const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextPageToken, setNextPageToken] = useState<string | undefined>(undefined);
   const [trackingLocation, setTrackingLocation] = useState(true);
@@ -21,8 +22,7 @@ export default function Home() {
     errorRate: 0,
   });
   const [showDashboard, setShowDashboard] = useState(false);
-  const [darkMode, setDarkMode] = useState(true);
-  const [mounted, setMounted] = useState(false);
+  const [darkMode, setDarkMode] = useState(false); // Changed to false - default to light/cozy mode
   
   const watchIdRef = useRef<number | null>(null);
   const lastSearchLocationRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -35,7 +35,7 @@ export default function Home() {
   }, []);
 
   // Function to search nearby cafés
-  const searchNearbyCafes = async (lat: number, lng: number, append: boolean = false) => {
+  const searchNearbyCafes = async (lat: number, lng: number, append: boolean = false, customQuery?: string) => {
     if (append) {
       setLoadingMore(true);
     } else {
@@ -43,10 +43,17 @@ export default function Home() {
       setNextPageToken(undefined);
     }
     
+    // Use custom query if provided, otherwise use state
+    const queryToUse = customQuery !== undefined ? customQuery : searchQuery;
+    
     try {
       const pageTokenParam = append && nextPageToken ? `&pageToken=${nextPageToken}` : '';
+      const queryParam = queryToUse ? `&query=${encodeURIComponent(queryToUse)}` : '';
+      
+      console.log('🔍 Searching with query:', queryToUse);
+      
       const response = await fetch(
-        `/api/cafes?lat=${lat}&lng=${lng}&radius=25000&query=${searchQuery}${pageTokenParam}`
+        `/api/cafes?lat=${lat}&lng=${lng}&radius=25000${queryParam}${pageTokenParam}`
       );
       const result = await response.json();
       
@@ -136,13 +143,13 @@ export default function Home() {
             lng: position.coords.longitude,
           };
           setUserLocation(loc);
-          searchNearbyCafes(loc.lat, loc.lng);
+          searchNearbyCafes(loc.lat, loc.lng, false, ''); // Pass empty string for initial load
         },
         (error) => {
           console.error('Geolocation error:', error);
           const defaultLoc = { lat: 37.7749, lng: -122.4194 };
           setUserLocation(defaultLoc);
-          searchNearbyCafes(defaultLoc.lat, defaultLoc.lng);
+          searchNearbyCafes(defaultLoc.lat, defaultLoc.lng, false, ''); // Pass empty string for initial load
         }
       );
 
@@ -166,7 +173,7 @@ export default function Home() {
           if (hasLocationChangedSignificantly(newLoc.lat, newLoc.lng)) {
             console.log('📍 User moved 1km+, refreshing cafés...');
             lastUpdateTimeRef.current = now;
-            searchNearbyCafes(newLoc.lat, newLoc.lng);
+            searchNearbyCafes(newLoc.lat, newLoc.lng, false, ''); // Don't use search query for auto-refresh
           }
         },
         (error) => {
@@ -195,7 +202,19 @@ export default function Home() {
 
   const handleSearch = () => {
     if (userLocation) {
-      searchNearbyCafes(userLocation.lat, userLocation.lng);
+      console.log('🔍 Search button clicked');
+      console.log('📝 Current searchQuery state:', searchQuery);
+      console.log('📍 User location:', userLocation);
+      searchNearbyCafes(userLocation.lat, userLocation.lng, false, searchQuery);
+    } else {
+      console.error('❌ No user location available');
+    }
+  };
+
+  const handleSearchKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      console.log('⌨️ Enter key pressed');
+      handleSearch();
     }
   };
 
@@ -208,7 +227,7 @@ export default function Home() {
   };
 
   return (
-    <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gray-50'} transition-colors duration-300`}>
+    <>
       {!mounted ? (
         <div className="flex items-center justify-center min-h-screen bg-gray-900">
           <div className="flex flex-col items-center gap-4">
@@ -217,7 +236,7 @@ export default function Home() {
           </div>
         </div>
       ) : (
-        <>
+        <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gray-50'} transition-colors duration-300`}>
       {/* Header */}
       <div className={`${darkMode ? 'bg-gray-800/50' : 'bg-white/50'} backdrop-blur-xl border-b ${darkMode ? 'border-gray-700' : 'border-gray-200'} sticky top-0 z-50`}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -330,11 +349,7 @@ export default function Home() {
               placeholder="Search cafés, areas, or vibes..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  handleSearch();
-                }
-              }}
+              onKeyPress={handleSearchKeyPress}
               className={`w-full pl-12 pr-4 py-4 rounded-2xl ${darkMode ? 'bg-gray-800 text-white border-gray-700' : 'bg-white text-gray-900 border-gray-300'} border focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all text-lg`}
             />
             <button 
@@ -348,12 +363,36 @@ export default function Home() {
 
         {/* Location Info */}
         {userLocation && (
-          <div className={`mb-6 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'} flex items-center gap-2`}>
-            <MapPin className={`w-4 h-4 ${trackingLocation ? 'text-green-400' : ''}`} />
-            <span>
-              {trackingLocation ? '🔴 Live tracking - ' : ''}
-              Showing {cafes.length} nearest cafés ({userLocation.lat.toFixed(4)}, {userLocation.lng.toFixed(4)})
-            </span>
+          <div className={`mb-6 text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'} flex items-center justify-between`}>
+            <div className="flex items-center gap-2">
+              <MapPin className={`w-4 h-4 ${trackingLocation ? 'text-green-400' : ''}`} />
+              <span>
+                {trackingLocation ? '🔴 Live tracking - ' : ''}
+                {searchQuery ? (
+                  <>Searching <span className="font-semibold text-purple-400">"{searchQuery}"</span> - {cafes.filter(c => {
+                    const query = searchQuery.toLowerCase().trim();
+                    const name = c.name.toLowerCase();
+                    const address = c.address.toLowerCase();
+                    return name.includes(query) || address.includes(query);
+                  }).length} results</>
+                ) : (
+                  <>Showing {cafes.length} nearest cafés</>
+                )}
+              </span>
+            </div>
+            {searchQuery && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  if (userLocation) {
+                    searchNearbyCafes(userLocation.lat, userLocation.lng, false, '');
+                  }
+                }}
+                className={`text-xs px-3 py-1 rounded-lg ${darkMode ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-200 hover:bg-gray-300'} transition-colors`}
+              >
+                Clear search
+              </button>
+            )}
           </div>
         )}
 
@@ -372,9 +411,18 @@ export default function Home() {
               <p>No cafés found nearby. Try adjusting your search or location.</p>
             </div>
           ) : (
-            cafes.map((cafe) => (
+            cafes
+              .filter(cafe => {
+                // Client-side filtering for more accurate search
+                if (!searchQuery || searchQuery.trim() === '') return true;
+                const query = searchQuery.toLowerCase().trim();
+                const name = cafe.name.toLowerCase();
+                const address = cafe.address.toLowerCase();
+                return name.includes(query) || address.includes(query);
+              })
+              .map((cafe) => (
               <a
-                key={cafe.id}
+                key={cafe.googlePlaceId}
                 href={`https://www.yelp.com/search?find_desc=${encodeURIComponent(cafe.name)}&find_loc=${encodeURIComponent(cafe.address)}`}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -510,8 +558,8 @@ export default function Home() {
           </div>
         </div>
       </div>
-      </>
+        </div>
       )}
-    </div>
+    </>
   );
 }

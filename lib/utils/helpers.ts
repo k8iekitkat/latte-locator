@@ -6,7 +6,9 @@ export function getCacheKey(params: SearchParams): string {
   // Round coordinates to 3 decimal places for cache hits in similar areas
   const lat = latitude.toFixed(3);
   const lng = longitude.toFixed(3);
-  return `cafes:${lat},${lng}:${radius}:${query}`;
+  // Include query in cache key so different searches don't return same cached results
+  const searchPart = query ? `:search:${query.toLowerCase().trim()}` : '';
+  return `cafes:${lat},${lng}:${radius}${searchPart}`;
 }
 
 export function calculateDistance(
