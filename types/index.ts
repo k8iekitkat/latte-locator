@@ -47,12 +47,14 @@ export interface CacheEntry {
 export interface APIResponse<T> {
   success: boolean;
   data: T;
+  nextPageToken?: string;
   meta?: {
     count?: number;
     cacheHit?: boolean;
     cacheSource?: string;
     responseTime?: number;
     timestamp?: string;
+    hasMore?: boolean;
   };
   error?: string;
 }

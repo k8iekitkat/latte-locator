@@ -10,7 +10,9 @@ export default function Home() {
   const [selectedCafe, setSelectedCafe] = useState<Cafe | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // Start as true to prevent hydration
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextPageToken, setNextPageToken] = useState<string | undefined>(undefined);
   const [trackingLocation, setTrackingLocation] = useState(true);
   const [metrics, setMetrics] = useState<PerformanceMetrics>({
     cacheHitRate: 0,
@@ -24,35 +26,57 @@ export default function Home() {
   
   const watchIdRef = useRef<number | null>(null);
   const lastSearchLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastUpdateTimeRef = useRef<number>(0);
 
   // Fix hydration error - only render after mount
   useEffect(() => {
     setMounted(true);
+    setLoading(false); // Now we can show content
   }, []);
 
   // Function to search nearby cafés
-  const searchNearbyCafes = async (lat: number, lng: number) => {
-    setLoading(true);
+  const searchNearbyCafes = async (lat: number, lng: number, append: boolean = false) => {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+      setNextPageToken(undefined);
+    }
+    
     try {
+      const pageTokenParam = append && nextPageToken ? `&pageToken=${nextPageToken}` : '';
       const response = await fetch(
-        `/api/cafes?lat=${lat}&lng=${lng}&radius=10000&query=${searchQuery}`
+        `/api/cafes?lat=${lat}&lng=${lng}&radius=25000&query=${searchQuery}${pageTokenParam}`
       );
       const result = await response.json();
       
       if (result.success) {
-        setCafes(result.data);
+        if (append) {
+          // Append new cafés to existing list
+          setCafes(prev => [...prev, ...result.data]);
+        } else {
+          // Replace cafés
+          setCafes(result.data);
+        }
+        
+        // Update nextPageToken from response
+        setNextPageToken(result.nextPageToken || undefined);
+        
         console.log('✅ Fetched cafés:', result.data.length);
-        console.log('📊 API metrics:', result.meta);
+        console.log('📊 Next page token:', result.nextPageToken ? 'Available' : 'None');
+        console.log('📊 Has more:', !!result.nextPageToken);
         
         // Update metrics
         setMetrics(prev => ({
-          cacheHitRate: result.meta.cacheHit ? 100 : prev.cacheHitRate,
-          avgResponseTime: result.meta.responseTime,
+          cacheHitRate: result.meta?.cacheHit ? 100 : prev.cacheHitRate,
+          avgResponseTime: result.meta?.responseTime || 0,
           totalRequests: prev.totalRequests + 1,
           errorRate: prev.errorRate,
         }));
         
-        lastSearchLocationRef.current = { lat, lng };
+        if (!append) {
+          lastSearchLocationRef.current = { lat, lng };
+        }
       } else {
         console.error('API error:', result.error);
       }
@@ -60,10 +84,20 @@ export default function Home() {
       console.error('Error fetching cafes:', error);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
-  // Check if location has changed significantly (more than ~500m)
+  // Function to load more cafés
+  const loadMoreCafes = async () => {
+    if (userLocation && nextPageToken && !loadingMore) {
+      // Wait 2 seconds before fetching (Google requirement)
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      searchNearbyCafes(userLocation.lat, userLocation.lng, true);
+    }
+  };
+
+  // Check if location has changed significantly (more than ~1km)
   const hasLocationChangedSignificantly = (newLat: number, newLng: number): boolean => {
     if (!lastSearchLocationRef.current) return true;
     
@@ -83,16 +117,18 @@ export default function Home() {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     const distance = R * c;
 
-    // Threshold: 500 meters
-    return distance > 500;
+    // Threshold: 1000 meters (1km) - only refresh when user moves 1km
+    return distance > 1000;
   };
 
   // Set up live location tracking
   useEffect(() => {
-    if (!trackingLocation) return;
+    if (!mounted || !trackingLocation) return;
 
     if ('geolocation' in navigator) {
-      // Get initial position
+      // Get initial position - don't block UI
+      setLoading(false); // Allow UI to show immediately
+      
       navigator.geolocation.getCurrentPosition(
         (position) => {
           const loc = {
@@ -120,9 +156,16 @@ export default function Home() {
           
           setUserLocation(newLoc);
           
+          // Debounce: Only check every 30 seconds minimum
+          const now = Date.now();
+          if (now - lastUpdateTimeRef.current < 30000) {
+            return; // Skip if less than 30 seconds since last update
+          }
+          
           // Only refresh cafés if user has moved significantly
           if (hasLocationChangedSignificantly(newLoc.lat, newLoc.lng)) {
-            console.log('📍 Location changed significantly, refreshing cafés...');
+            console.log('📍 User moved 1km+, refreshing cafés...');
+            lastUpdateTimeRef.current = now;
             searchNearbyCafes(newLoc.lat, newLoc.lng);
           }
         },
@@ -130,9 +173,9 @@ export default function Home() {
           console.error('Watch position error:', error);
         },
         {
-          enableHighAccuracy: true,
-          maximumAge: 10000, // Cache position for 10 seconds
-          timeout: 5000,
+          enableHighAccuracy: false, // Changed to false - less battery drain
+          maximumAge: 30000, // Cache position for 30 seconds
+          timeout: 10000,
         }
       );
     } else {
@@ -148,7 +191,7 @@ export default function Home() {
         navigator.geolocation.clearWatch(watchIdRef.current);
       }
     };
-  }, [trackingLocation]);
+  }, [trackingLocation, mounted]);
 
   const handleSearch = () => {
     if (userLocation) {
@@ -167,8 +210,11 @@ export default function Home() {
   return (
     <div className={`min-h-screen ${darkMode ? 'bg-gray-900' : 'bg-gray-50'} transition-colors duration-300`}>
       {!mounted ? (
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500"></div>
+        <div className="flex items-center justify-center min-h-screen bg-gray-900">
+          <div className="flex flex-col items-center gap-4">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-500"></div>
+            <p className="text-gray-400">Loading CaféConnect...</p>
+          </div>
         </div>
       ) : (
         <>
@@ -416,6 +462,36 @@ export default function Home() {
             ))
           )}
         </div>
+
+        {/* Load More Button */}
+        {!loading && cafes.length > 0 && nextPageToken && (
+          <div className="mt-6 text-center">
+            <button
+              onClick={loadMoreCafes}
+              disabled={loadingMore}
+              className={`px-8 py-4 rounded-xl font-semibold text-white transition-all ${
+                loadingMore
+                  ? 'bg-gray-600 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-purple-500 to-pink-500 hover:shadow-lg hover:scale-105'
+              }`}
+            >
+              {loadingMore ? (
+                <span className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  Loading more cafés...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  Load More Cafés
+                  <TrendingUp className="w-5 h-5" />
+                </span>
+              )}
+            </button>
+            <p className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'} mt-2`}>
+              {cafes.length} cafés shown • More available nearby
+            </p>
+          </div>
+        )}
 
         {/* Info Footer */}
         <div className={`mt-8 p-6 ${darkMode ? 'bg-gray-800/30' : 'bg-gray-100'} rounded-2xl border ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
